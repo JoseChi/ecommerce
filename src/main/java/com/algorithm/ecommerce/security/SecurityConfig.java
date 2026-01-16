@@ -27,28 +27,28 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                // Aquí activamos la configuración CORS que definimos abajo 👇
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // 1. Rutas Públicas (Cualquiera puede entrar)
+                        // 1. Rutas Públicas
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/media/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/products/**").permitAll() // Solo ver productos es público
+                        .requestMatchers(HttpMethod.GET, "/api/products/**").permitAll()
                         .requestMatchers("/images/**").permitAll()
 
-                        // Swagger y Documentación
+                        // Swagger
                         .requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers("/swagger-ui/**").permitAll()
                         .requestMatchers("/swagger-ui.html").permitAll()
 
-                        // 2. Rutas Protegidas (Requieren Login)
-                        // Agregamos explícitamente estas para evitar el error 403
-                        .requestMatchers("/api/cart/**").authenticated()     // <--- AGREGADO: Carrito
-                        .requestMatchers("/api/orders/**").authenticated()   // <--- AGREGADO: Pedidos
-                        .requestMatchers("/api/payments/**").authenticated() // <--- AGREGADO: Stripe
-                        .requestMatchers("/api/users/**").authenticated()    // <--- RECOMENDADO: Proteger usuarios
+                        // 2. Rutas Protegidas
+                        .requestMatchers("/api/cart/**").authenticated()
+                        .requestMatchers("/api/orders/**").authenticated()
+                        .requestMatchers("/api/payments/**").authenticated()
+                        .requestMatchers("/api/users/**").authenticated()
 
-                        // 3. Todo lo demás requiere Token
+                        // 3. Resto bloqueado
                         .anyRequest().authenticated()
                 );
 
@@ -60,10 +60,15 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        // Asegúrate de que este puerto coincida con tu Frontend (React)
-        configuration.setAllowedOrigins(List.of("http://localhost:5173"));
+
+        // --- LA CORRECCIÓN MAESTRA ---
+        // Usamos OriginPatterns con "*" para permitir Vercel, Localhost y lo que sea.
+        configuration.setAllowedOriginPatterns(List.of("*"));
+
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
+
+        // Esto permite enviar Cookies/Tokens (necesario para que funcione el login)
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
