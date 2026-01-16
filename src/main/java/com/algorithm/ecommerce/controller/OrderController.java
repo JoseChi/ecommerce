@@ -2,12 +2,13 @@ package com.algorithm.ecommerce.controller;
 
 import com.algorithm.ecommerce.entity.*;
 import com.algorithm.ecommerce.repository.*;
-import com.algorithm.ecommerce.service.EmailService; // <--- 1. IMPORTANTE: Importar el servicio de email
+import com.algorithm.ecommerce.service.EmailService;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.data.domain.Sort; // <--- IMPORTANTE: Para ordenar por fecha
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -15,7 +16,8 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/orders")
-@CrossOrigin(origins = "http://localhost:5173")
+// Permitimos acceso desde Vercel y Localhost
+@CrossOrigin(originPatterns = "*")
 public class OrderController {
 
     @Autowired
@@ -31,13 +33,12 @@ public class OrderController {
     private ProductRepository productRepository;
 
     @Autowired
-    private EmailService emailService; // <--- 2. INYECCIÓN DEL SERVICIO DE EMAIL
+    private EmailService emailService;
 
-    // 1. PROCESO DE CHECKOUT MEJORADO
+    // 1. PROCESO DE CHECKOUT
     @PostMapping("/checkout/{userId}")
     @Transactional
     public ResponseEntity<?> createOrder(@PathVariable Long userId) {
-
         System.out.println("Iniciando checkout para el usuario ID: " + userId);
 
         User user = userRepository.findById(userId)
@@ -49,19 +50,18 @@ public class OrderController {
             return ResponseEntity.badRequest().body("El carrito está vacío.");
         }
 
-        // --- VALIDACIÓN DE STOCK ANTES DE CREAR NADA ---
+        // Validación de stock
         for (CartItem cart : cartItems) {
             Product product = cart.getProduct();
             if (product.getStock() < cart.getQuantity()) {
-                // Si falta stock, detenemos todo y avisamos qué producto falló
                 return ResponseEntity.badRequest().body("❌ Stock insuficiente para: " + product.getName());
             }
         }
 
-        // --- CREACIÓN DE LA ORDEN ---
+        // Creación de la Orden
         Order order = new Order();
         order.setUser(user);
-        order.setStatus("PAGADO"); // Asumimos pagado porque viene de Stripe
+        order.setStatus("PAGADO");
 
         List<OrderItem> orderItems = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO;
@@ -69,11 +69,11 @@ public class OrderController {
         for (CartItem cart : cartItems) {
             Product product = cart.getProduct();
 
-            // 1. RESTAR STOCK (Protección de inventario)
+            // Restar Stock
             product.setStock(product.getStock() - cart.getQuantity());
             productRepository.save(product);
 
-            // 2. Crear detalle
+            // Crear detalle
             OrderItem orderItem = new OrderItem();
             orderItem.setOrder(order);
             orderItem.setProduct(product);
@@ -96,15 +96,11 @@ public class OrderController {
         Order savedOrder = orderRepository.save(order);
         cartRepository.deleteAll(cartItems);
 
-        System.out.println("Checkout completado. Orden ID: " + savedOrder.getId());
-
-        // --- 3. ENVIAR CORREO DE CONFIRMACIÓN (Async) ---
-        // Lo ejecutamos en un hilo aparte para no hacer esperar al usuario
+        // Enviar correo (Async)
         try {
             String userEmail = user.getEmail();
             if (userEmail != null && !userEmail.isEmpty()) {
                 new Thread(() -> {
-                    // Convertimos BigDecimal a Double para el servicio de email
                     emailService.sendOrderConfirmation(
                             userEmail,
                             savedOrder.getId(),
@@ -113,10 +109,9 @@ public class OrderController {
                 }).start();
             }
         } catch (Exception e) {
-            System.err.println("No se pudo enviar el correo, pero la orden sí se guardó: " + e.getMessage());
+            System.err.println("Error enviando correo: " + e.getMessage());
         }
 
-        // Devolvemos la orden guardada con estatus 200 OK
         return ResponseEntity.ok(savedOrder);
     }
 
@@ -131,9 +126,7 @@ public class OrderController {
             return ResponseEntity.badRequest().body("La orden ya estaba cancelada.");
         }
 
-        System.out.println("Cancelando orden ID: " + orderId + ". Devolviendo stock...");
-
-        // Devolver productos al inventario
+        // Devolver stock
         for (OrderItem item : order.getItems()) {
             Product product = item.getProduct();
             product.setStock(product.getStock() + item.getQuantity());
@@ -146,11 +139,12 @@ public class OrderController {
         return ResponseEntity.ok(updatedOrder);
     }
 
-    // 3. Ver historial de pedidos
+    // 3. Ver historial de un usuario específico
     @GetMapping("/user/{userId}")
     public List<Order> getUserOrders(@PathVariable Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+        // Ordenamos para ver la más reciente primero
         return orderRepository.findByUser(user);
     }
 
@@ -160,5 +154,13 @@ public class OrderController {
         Order order = orderRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Orden no encontrada"));
         return ResponseEntity.ok(order);
+    }
+
+    // 5. --- NUEVO: ENDPOINT PARA EL ADMINISTRADOR ---
+    // Trae TODAS las órdenes de la base de datos
+    @GetMapping("/admin/all")
+    public List<Order> getAllOrders() {
+        // Sort.by(Sort.Direction.DESC, "id") hará que las últimas ventas salgan primero
+        return orderRepository.findAll(Sort.by(Sort.Direction.DESC, "id"));
     }
 }
