@@ -4,15 +4,27 @@ import com.algorithm.ecommerce.entity.User;
 import com.algorithm.ecommerce.repository.UserRepository;
 import com.algorithm.ecommerce.dto.AuthRequest;
 import com.algorithm.ecommerce.security.JwtUtil;
+
+// --- IMPORTACIONES DE GOOGLE ---
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+// ------------------------------
+
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID; // Para generar contraseñas aleatorias a usuarios de Google
 
 @RestController
 @RequestMapping("/api/auth")
+// Permitimos conexiones desde cualquier lado (Vercel/Localhost)
+@CrossOrigin(originPatterns = "*")
 public class AuthController {
 
     @Autowired
@@ -21,8 +33,10 @@ public class AuthController {
     @Autowired
     private JwtUtil jwtUtil;
 
-    // --- LOGIN ---
-    // Cambié Map<String, String> a Map<String, Object> para poder enviar el ID numérico
+    // TU CLIENT ID DE GOOGLE (El que acabamos de crear)
+    private static final String GOOGLE_CLIENT_ID = "1089912669985-3j99seb7eol3vbdk3kqpirijh6ht0pof.apps.googleusercontent.com";
+
+    // --- 1. LOGIN NORMAL (Usuario y Contraseña) ---
     @PostMapping("/login")
     public Map<String, Object> login(@Valid @RequestBody AuthRequest authRequest) {
 
@@ -33,13 +47,10 @@ public class AuthController {
             throw new RuntimeException("Contraseña incorrecta");
         }
 
-        // MODIFICACIÓN: Pasamos el ID al generar el token
         String token = jwtUtil.generateToken(user.getUsername(), user.getId());
 
         Map<String, Object> response = new HashMap<>();
         response.put("token", token);
-
-        // RESPALDO: Enviamos también los datos claros por si el frontend no quiere decodificar
         response.put("id", user.getId());
         response.put("username", user.getUsername());
         response.put("role", user.getRole());
@@ -47,7 +58,7 @@ public class AuthController {
         return response;
     }
 
-    // --- REGISTRO ---
+    // --- 2. REGISTRO NORMAL ---
     @PostMapping("/register")
     public Map<String, Object> register(@Valid @RequestBody AuthRequest request) {
 
@@ -63,10 +74,7 @@ public class AuthController {
         newUser.setLastName("Nuevo");
         newUser.setEmail(request.getUsername() + "@ejemplo.com");
 
-        // Guardamos para que la base de datos genere el ID
         User savedUser = userRepository.save(newUser);
-
-        // MODIFICACIÓN: Usamos el ID generado
         String token = jwtUtil.generateToken(savedUser.getUsername(), savedUser.getId());
 
         Map<String, Object> response = new HashMap<>();
@@ -75,5 +83,66 @@ public class AuthController {
         response.put("id", savedUser.getId());
 
         return response;
+    }
+
+    // --- 3. LOGIN CON GOOGLE (NUEVO) ---
+    @PostMapping("/google")
+    public Map<String, Object> googleLogin(@RequestBody Map<String, String> payload) {
+        String tokenGoogle = payload.get("token");
+
+        try {
+            // A. Configurar el verificador de Google
+            GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(new NetHttpTransport(), new GsonFactory())
+                    .setAudience(Collections.singletonList(GOOGLE_CLIENT_ID))
+                    .build();
+
+            // B. Verificar el token recibido del Frontend
+            GoogleIdToken idToken = verifier.verify(tokenGoogle);
+
+            if (idToken != null) {
+                GoogleIdToken.Payload googlePayload = idToken.getPayload();
+
+                // C. Obtener datos del usuario de Google
+                String email = googlePayload.getEmail();
+                String name = (String) googlePayload.get("name");
+                String givenName = (String) googlePayload.get("given_name"); // Nombre pila
+                String familyName = (String) googlePayload.get("family_name"); // Apellido
+
+                // D. Buscar si ya existe en nuestra base de datos (usamos el email como username)
+                User user = userRepository.findByUsername(email).orElse(null);
+
+                if (user == null) {
+                    // SI NO EXISTE -> LO REGISTRAMOS AUTOMÁTICAMENTE
+                    user = new User();
+                    user.setUsername(email); // El usuario será su correo
+                    user.setEmail(email);
+                    user.setFirstName(givenName != null ? givenName : "Usuario");
+                    user.setLastName(familyName != null ? familyName : "Google");
+                    user.setRole("ROLE_USER");
+                    // Generamos una contraseña aleatoria compleja porque entrará con Google
+                    user.setPassword(UUID.randomUUID().toString());
+
+                    user = userRepository.save(user);
+                }
+
+                // E. Generar nuestro propio token JWT (Igual que en el login normal)
+                String jwtToken = jwtUtil.generateToken(user.getUsername(), user.getId());
+
+                Map<String, Object> response = new HashMap<>();
+                response.put("token", jwtToken);
+                response.put("id", user.getId());
+                response.put("username", user.getUsername());
+                response.put("role", user.getRole());
+
+                return response;
+
+            } else {
+                throw new RuntimeException("Token de Google inválido");
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new RuntimeException("Error en autenticación con Google: " + e.getMessage());
+        }
     }
 }
