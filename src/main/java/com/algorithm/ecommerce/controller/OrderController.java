@@ -13,6 +13,7 @@ import org.springframework.data.domain.Sort;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map; // Importante para recibir el paymentId
 
 @RestController
 @RequestMapping("/api/orders")
@@ -34,14 +35,20 @@ public class OrderController {
     @Autowired
     private EmailService emailService;
 
-    // 1. PROCESO DE CHECKOUT
+    // 1. PROCESO DE CHECKOUT MEJORADO (Con Envío y Stripe)
     @PostMapping("/checkout/{userId}")
     @Transactional
-    public ResponseEntity<?> createOrder(@PathVariable Long userId) {
+    public ResponseEntity<?> createOrder(@PathVariable Long userId, @RequestBody Map<String, String> paymentData) {
         System.out.println("Iniciando checkout para el usuario ID: " + userId);
 
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado con ID: " + userId));
+
+        // A. VALIDAR DIRECCIÓN
+        // No podemos enviar si no sabemos a dónde.
+        if (user.getAddress() == null || user.getAddress().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("❌ Error: No tienes una dirección de envío registrada. Por favor ve a 'Mi Cuenta' y actualiza tu dirección antes de comprar.");
+        }
 
         List<CartItem> cartItems = cartRepository.findByUser(user);
 
@@ -49,30 +56,37 @@ public class OrderController {
             return ResponseEntity.badRequest().body("El carrito está vacío.");
         }
 
-        // Validación de stock
+        // B. PREPARAR LA ORDEN
+        Order order = new Order();
+        order.setUser(user);
+        order.setStatus("PAGADO"); // Asumimos que si llega aquí, Stripe ya cobró
+
+        // Guardamos la dirección "congelada" en el momento de la compra
+        String fullAddress = user.getAddress() + ", " + user.getCity() + ", CP " + user.getZipCode();
+        order.setShippingAddress(fullAddress);
+
+        // Guardamos el ID del pago de Stripe (ej. pi_3Mg...)
+        if (paymentData.containsKey("paymentId")) {
+            order.setPaymentId(paymentData.get("paymentId"));
+        }
+
+        List<OrderItem> orderItems = new ArrayList<>();
+        BigDecimal productsTotal = BigDecimal.ZERO;
+
+        // C. PROCESAR PRODUCTOS Y STOCK
         for (CartItem cart : cartItems) {
             Product product = cart.getProduct();
+
+            // Validación de Stock
             if (product.getStock() < cart.getQuantity()) {
                 return ResponseEntity.badRequest().body("❌ Stock insuficiente para: " + product.getName());
             }
-        }
-
-        // Creación de la Orden
-        Order order = new Order();
-        order.setUser(user);
-        order.setStatus("PAGADO");
-
-        List<OrderItem> orderItems = new ArrayList<>();
-        BigDecimal total = BigDecimal.ZERO;
-
-        for (CartItem cart : cartItems) {
-            Product product = cart.getProduct();
 
             // Restar Stock
             product.setStock(product.getStock() - cart.getQuantity());
             productRepository.save(product);
 
-            // Crear detalle
+            // Crear detalle del item
             OrderItem orderItem = new OrderItem();
             orderItem.setOrder(order);
             orderItem.setProduct(product);
@@ -81,21 +95,30 @@ public class OrderController {
 
             orderItems.add(orderItem);
 
+            // Sumar al subtotal de productos
             BigDecimal subtotal = product.getPrice().multiply(new BigDecimal(cart.getQuantity()));
-            total = total.add(subtotal);
+            productsTotal = productsTotal.add(subtotal);
         }
 
-        if (total.compareTo(BigDecimal.ZERO) <= 0) {
-            return ResponseEntity.badRequest().body("El total no puede ser 0.");
+        // D. CÁLCULO DE LOGÍSTICA DE ENVÍO 🚚
+        BigDecimal shippingCost = new BigDecimal("150.00"); // Costo base de envío
+        BigDecimal freeShippingThreshold = new BigDecimal("999.00"); // Envío gratis arriba de esto
+
+        // Si el total de productos es mayor o igual a 999, el envío es GRATIS
+        if (productsTotal.compareTo(freeShippingThreshold) >= 0) {
+            shippingCost = BigDecimal.ZERO;
         }
 
+        // Guardamos costos
+        order.setShippingCost(shippingCost);
+        order.setTotalAmount(productsTotal.add(shippingCost)); // Total Final = Productos + Envío
         order.setItems(orderItems);
-        order.setTotalAmount(total);
 
+        // E. GUARDAR TODO
         Order savedOrder = orderRepository.save(order);
         cartRepository.deleteAll(cartItems);
 
-        // Enviar correo (Async)
+        // F. ENVIAR CORREO DE CONFIRMACIÓN (Hilo secundario para no trabar la respuesta)
         try {
             String userEmail = user.getEmail();
             if (userEmail != null && !userEmail.isEmpty()) {
@@ -143,6 +166,7 @@ public class OrderController {
     public List<Order> getUserOrders(@PathVariable Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+        // Ordenamos por ID descendente para ver las nuevas primero
         return orderRepository.findByUser(user);
     }
 
@@ -160,13 +184,12 @@ public class OrderController {
         return orderRepository.findAll(Sort.by(Sort.Direction.DESC, "id"));
     }
 
-    // 6. --- NUEVO: CAMBIAR ESTADO DE LA ORDEN ---
+    // 6. CAMBIAR ESTADO DE LA ORDEN (Para Admin: ENVIADO, ENTREGADO)
     @PutMapping("/{id}/status")
     public ResponseEntity<?> updateOrderStatus(@PathVariable Long id, @RequestParam String status) {
         Order order = orderRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Orden no encontrada"));
 
-        // Actualizamos el estado (PAGADO -> ENVIADO -> ENTREGADO)
         order.setStatus(status);
         Order updatedOrder = orderRepository.save(order);
 
