@@ -19,11 +19,11 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID; // Para generar contraseñas aleatorias a usuarios de Google
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/auth")
-// Permitimos conexiones desde cualquier lado (Vercel/Localhost)
+// Permitimos conexiones desde cualquier lado
 @CrossOrigin(originPatterns = "*")
 public class AuthController {
 
@@ -33,10 +33,10 @@ public class AuthController {
     @Autowired
     private JwtUtil jwtUtil;
 
-    // TU CLIENT ID DE GOOGLE (El que acabamos de crear)
+    // TU CLIENT ID DE GOOGLE
     private static final String GOOGLE_CLIENT_ID = "1089912669985-3j99seb7eol3vbdk3kqpirijh6ht0pof.apps.googleusercontent.com";
 
-    // --- 1. LOGIN NORMAL (Usuario y Contraseña) ---
+    // --- 1. LOGIN NORMAL ---
     @PostMapping("/login")
     public Map<String, Object> login(@Valid @RequestBody AuthRequest authRequest) {
 
@@ -85,47 +85,47 @@ public class AuthController {
         return response;
     }
 
-    // --- 3. LOGIN CON GOOGLE (NUEVO) ---
+    // --- 3. LOGIN CON GOOGLE (CORREGIDO) ---
     @PostMapping("/google")
     public Map<String, Object> googleLogin(@RequestBody Map<String, String> payload) {
         String tokenGoogle = payload.get("token");
 
         try {
-            // A. Configurar el verificador de Google
+            // A. Configurar el verificador
             GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(new NetHttpTransport(), new GsonFactory())
                     .setAudience(Collections.singletonList(GOOGLE_CLIENT_ID))
                     .build();
 
-            // B. Verificar el token recibido del Frontend
+            // B. Verificar el token
             GoogleIdToken idToken = verifier.verify(tokenGoogle);
 
             if (idToken != null) {
                 GoogleIdToken.Payload googlePayload = idToken.getPayload();
 
-                // C. Obtener datos del usuario de Google
+                // C. Obtener datos de Google
                 String email = googlePayload.getEmail();
                 String name = (String) googlePayload.get("name");
-                String givenName = (String) googlePayload.get("given_name"); // Nombre pila
-                String familyName = (String) googlePayload.get("family_name"); // Apellido
+                String givenName = (String) googlePayload.get("given_name");
+                String familyName = (String) googlePayload.get("family_name");
 
-                // D. Buscar si ya existe en nuestra base de datos (usamos el email como username)
-                User user = userRepository.findByUsername(email).orElse(null);
+                // D. CORRECCIÓN IMPORTANTE: Buscar por EMAIL, no por username
+                // Esto encuentra tu cuenta "joseantoniochi5@gmail.com" aunque tu username sea "usuario_prueba_2"
+                User user = userRepository.findByEmail(email).orElse(null);
 
                 if (user == null) {
-                    // SI NO EXISTE -> LO REGISTRAMOS AUTOMÁTICAMENTE
+                    // SI NO EXISTE EL CORREO -> LO CREAMOS
                     user = new User();
-                    user.setUsername(email); // El usuario será su correo
+                    user.setUsername(email); // El username será el email
                     user.setEmail(email);
                     user.setFirstName(givenName != null ? givenName : "Usuario");
                     user.setLastName(familyName != null ? familyName : "Google");
                     user.setRole("ROLE_USER");
-                    // Generamos una contraseña aleatoria compleja porque entrará con Google
                     user.setPassword(UUID.randomUUID().toString());
 
                     user = userRepository.save(user);
                 }
 
-                // E. Generar nuestro propio token JWT (Igual que en el login normal)
+                // E. Generar nuestro token JWT
                 String jwtToken = jwtUtil.generateToken(user.getUsername(), user.getId());
 
                 Map<String, Object> response = new HashMap<>();
