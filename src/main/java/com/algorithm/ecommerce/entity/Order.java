@@ -20,24 +20,25 @@ public class Order {
     @Column(name = "order_date")
     private LocalDateTime orderDate;
 
-    // El total final de la compra (Productos + Envío)
     @Column(name = "total_price", nullable = false)
     private BigDecimal totalAmount;
 
-    private String status; // "PENDIENTE", "PAGADO", "ENVIADO", "ENTREGADO", "CANCELADO"
+    private String status;
 
-    // --- 🚚 NUEVOS CAMPOS PARA LOGÍSTICA 🚚 ---
-
+    // --- LOGÍSTICA ---
     @Column(name = "shipping_cost")
-    private BigDecimal shippingCost; // Cuánto se cobró de envío (ej. 150.00 o 0.00)
+    private BigDecimal shippingCost;
 
     @Column(name = "payment_id")
-    private String paymentId;        // El ID de Stripe (ej. pi_3Mg...) para rastrear el pago
+    private String paymentId;
 
     @Column(name = "shipping_address")
-    private String shippingAddress;  // Guardamos la dirección escrita (snapshot) por si el usuario se muda después
+    private String shippingAddress;
 
-    // ------------------------------------------
+    // 👇 ESTE ES EL QUE TE FALTABA
+    @Column(name = "tracking_number")
+    private String trackingNumber;
+    // -----------------------------
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL)
     private List<OrderItem> items;
@@ -46,7 +47,7 @@ public class Order {
     protected void onCreate() {
         orderDate = LocalDateTime.now();
         if (status == null) status = "PENDIENTE";
-        if (shippingCost == null) shippingCost = BigDecimal.ZERO; // Por seguridad
+        if (shippingCost == null) shippingCost = BigDecimal.ZERO;
     }
 
     // --- GETTERS Y SETTERS ---
@@ -69,8 +70,6 @@ public class Order {
     public List<OrderItem> getItems() { return items; }
     public void setItems(List<OrderItem> items) { this.items = items; }
 
-    // --- GETTERS Y SETTERS DE LOS NUEVOS CAMPOS ---
-
     public BigDecimal getShippingCost() { return shippingCost; }
     public void setShippingCost(BigDecimal shippingCost) { this.shippingCost = shippingCost; }
 
@@ -79,4 +78,8 @@ public class Order {
 
     public String getShippingAddress() { return shippingAddress; }
     public void setShippingAddress(String shippingAddress) { this.shippingAddress = shippingAddress; }
+
+    // 👇 GETTER Y SETTER DE LA GUÍA (Para quitar la línea roja)
+    public String getTrackingNumber() { return trackingNumber; }
+    public void setTrackingNumber(String trackingNumber) { this.trackingNumber = trackingNumber; }
 }
