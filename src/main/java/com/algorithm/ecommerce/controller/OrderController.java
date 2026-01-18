@@ -8,7 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.data.domain.Sort; // <--- IMPORTANTE: Para ordenar por fecha
+import org.springframework.data.domain.Sort;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -16,7 +16,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/orders")
-// Permitimos acceso desde Vercel y Localhost
 @CrossOrigin(originPatterns = "*")
 public class OrderController {
 
@@ -144,7 +143,6 @@ public class OrderController {
     public List<Order> getUserOrders(@PathVariable Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
-        // Ordenamos para ver la más reciente primero
         return orderRepository.findByUser(user);
     }
 
@@ -156,11 +154,22 @@ public class OrderController {
         return ResponseEntity.ok(order);
     }
 
-    // 5. --- NUEVO: ENDPOINT PARA EL ADMINISTRADOR ---
-    // Trae TODAS las órdenes de la base de datos
+    // 5. ENDPOINT PARA EL ADMINISTRADOR (Listar todo)
     @GetMapping("/admin/all")
     public List<Order> getAllOrders() {
-        // Sort.by(Sort.Direction.DESC, "id") hará que las últimas ventas salgan primero
         return orderRepository.findAll(Sort.by(Sort.Direction.DESC, "id"));
+    }
+
+    // 6. --- NUEVO: CAMBIAR ESTADO DE LA ORDEN ---
+    @PutMapping("/{id}/status")
+    public ResponseEntity<?> updateOrderStatus(@PathVariable Long id, @RequestParam String status) {
+        Order order = orderRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Orden no encontrada"));
+
+        // Actualizamos el estado (PAGADO -> ENVIADO -> ENTREGADO)
+        order.setStatus(status);
+        Order updatedOrder = orderRepository.save(order);
+
+        return ResponseEntity.ok(updatedOrder);
     }
 }
